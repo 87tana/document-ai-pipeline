@@ -1,0 +1,31 @@
+# Virtual environment
+.venv/
+
+# Data — never commit datasets
+data/
+
+# Trained models — too large for GitHub
+models/
+
+# MLflow tracking store
+mlflow/
+mlruns/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Environment variables
+.env
+*.env
+
+# OS
+.DS_Store

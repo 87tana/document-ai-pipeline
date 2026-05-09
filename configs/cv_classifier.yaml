@@ -1,0 +1,38 @@
+experiment:
+  name: "doc-classifier-v1"
+  tags:
+    dataset: "rvlcdip"
+    task: "document-classification"
+    layer: "cv"
+
+data:
+  dataset: "rvlcdip"
+  data_dir: "data/processed/rvlcdip"
+  num_classes: 16
+  image_size: 224
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  sample_mode: true
+
+model:
+  architecture: "resnet50"
+  pretrained: true
+  freeze_backbone: false
+
+training:
+  epochs: 1
+  batch_size: 32
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
+  scheduler: "cosine"
+  early_stopping_patience: 5
+
+mlflow:
+  tracking_uri: "mlflow/"
+  experiment_name: "arztpraxis-cv-classifier"
+  log_model: true
+
+output:
+  model_dir: "models/cv_classifier"
+  checkpoint_every_n_epochs: 5
