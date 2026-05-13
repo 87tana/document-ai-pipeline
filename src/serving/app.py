@@ -9,11 +9,11 @@ Endpoints:
 """
 
 import io
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import timm
 import torch
-import torch.nn as nn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
@@ -36,46 +36,12 @@ LABELS = [
 ]
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
-
-app = FastAPI(
-    title="Document AI Pipeline",
-    description="Document classification and text extraction for clinic document triage.",
-    version="0.1.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# ── Response models ───────────────────────────────────────────────────────────
-
-class HealthResponse(BaseModel):
-    status: str
-    model: str
-    version: str
-
-class ClassifyResponse(BaseModel):
-    predicted_class: str
-    class_id: int
-    confidence: float
-    all_scores: dict
-
-class PipelineResponse(BaseModel):
-    classification: ClassifyResponse
-    extracted_text: str
-    word_count: int
-
-
-# ── Model loading (once at startup) ──────────────────────────────────────────
+# ── Model loading ─────────────────────────────────────────────────────────────
 
 _model = None
 _device = None
 _transform = None
+
 
 def load_model():
     global _model, _device, _transform
@@ -104,9 +70,50 @@ def load_model():
     print(f"Model loaded: {ARCHITECTURE} on {_device}")
 
 
-@app.on_event("startup")
-def startup_event():
+# ── Lifespan (modern FastAPI pattern) ─────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app):
     load_model()
+    yield
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
+
+app = FastAPI(
+    title="Document AI Pipeline",
+    description="Document classification and text extraction for clinic document triage.",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ── Response models ───────────────────────────────────────────────────────────
+
+class HealthResponse(BaseModel):
+    status: str
+    model: str
+    version: str
+
+
+class ClassifyResponse(BaseModel):
+    predicted_class: str
+    class_id: int
+    confidence: float
+    all_scores: dict
+
+
+class PipelineResponse(BaseModel):
+    classification: ClassifyResponse
+    extracted_text: str
+    word_count: int
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
