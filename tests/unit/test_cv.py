@@ -1,6 +1,5 @@
 # tests/unit/test_cv.py
 import numpy as np
-import pytest
 import torch
 from PIL import Image
 
