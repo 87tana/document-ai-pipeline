@@ -55,7 +55,7 @@ def validate(split="train"):#this function validates one dataset split
           f"{corrupt} corrupt" if corrupt else "all valid")
 
     # 6. No null labels
-    nulls = sum(1 for l in labels if l is None)
+    nulls = sum(1 for label in labels if label is None)
     check("No null labels", nulls == 0, f"{nulls} nulls")
 
     # 7. OCR words not all empty

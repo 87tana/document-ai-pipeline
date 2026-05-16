@@ -13,7 +13,6 @@ from pathlib import Path
 
 import timm
 import torch
-import torch.nn as nn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
