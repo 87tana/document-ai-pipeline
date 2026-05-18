@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel
 from torchvision import transforms
-
+from src.monitoring.monitor import log_prediction
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -155,7 +155,9 @@ async def classify(file: UploadFile = File(...)):
         image = Image.open(io.BytesIO(contents))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid image file")
-    return predict(image)
+    result = predict(image)
+    log_prediction(result.predicted_class, result.confidence)
+    return result
 
 
 @app.post("/pipeline", response_model=PipelineResponse)
