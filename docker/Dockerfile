@@ -25,9 +25,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ ./src/
 COPY configs/ ./configs/
 
-# Copy model weights
-#COPY models/exp3_efficientnet_b0/ ./models/exp3_efficientnet_b0/
-
 # Expose port
 EXPOSE 8000
 
