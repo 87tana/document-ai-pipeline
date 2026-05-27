@@ -9,8 +9,11 @@ Endpoints:
 """
 
 import io
+import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+import boto3
 import timm
 import torch
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -18,11 +21,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel
 from torchvision import transforms
+
 from src.monitoring.monitor import log_prediction
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-MODEL_PATH = Path("models/exp3_efficientnet_b0/best_model.pt")
+MODEL_PATH = Path("/tmp/best_model.pt")
+S3_BUCKET = "document-ai-pipeline-models"
+S3_KEY = "models/exp3_efficientnet_b0/best_model.pt"
 ARCHITECTURE = "efficientnet_b0"
 NUM_CLASSES = 16
 IMAGE_SIZE = 224
@@ -35,12 +42,57 @@ LABELS = [
 ]
 
 
+# ── Model loading ─────────────────────────────────────────────────────────────
+
+_model = None
+_device = None
+_transform = None
+
+
+def load_model():
+    global _model, _device, _transform
+
+    # Download model from S3 if not present locally
+    if not MODEL_PATH.exists():
+        print("Downloading model from S3...")
+        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        boto3.client("s3").download_file(S3_BUCKET, S3_KEY, str(MODEL_PATH))
+        print("Model downloaded from S3.")
+
+    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _model = timm.create_model(
+        ARCHITECTURE,
+        pretrained=False,
+        num_classes=NUM_CLASSES
+    )
+    _model.load_state_dict(torch.load(MODEL_PATH, map_location=_device))
+    _model.to(_device)
+    _model.eval()
+
+    _transform = transforms.Compose([
+        transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225]),
+    ])
+    print(f"Model loaded: {ARCHITECTURE} on {_device}")
+
+
+# ── Lifespan — runs load_model() at startup ───────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app):
+    load_model()
+    yield
+
+
 # ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="Document AI Pipeline",
     description="Document classification and text extraction for clinic document triage.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -58,54 +110,18 @@ class HealthResponse(BaseModel):
     model: str
     version: str
 
+
 class ClassifyResponse(BaseModel):
     predicted_class: str
     class_id: int
     confidence: float
     all_scores: dict
 
+
 class PipelineResponse(BaseModel):
     classification: ClassifyResponse
     extracted_text: str
     word_count: int
-
-
-# ── Model loading (once at startup) ──────────────────────────────────────────
-
-_model = None
-_device = None
-_transform = None
-
-def load_model():
-    global _model, _device, _transform
-
-    if not MODEL_PATH.exists():
-        raise RuntimeError(f"Model not found at {MODEL_PATH}")
-
-    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    _model = timm.create_model(
-        ARCHITECTURE,
-        pretrained=False,
-        num_classes=NUM_CLASSES
-    )
-    _model.load_state_dict(torch.load(MODEL_PATH, map_location=_device))
-    _model.to(_device)
-    _model.eval()
-
-    _transform = transforms.Compose([
-        transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406],
-                             [0.229, 0.224, 0.225]),
-    ])
-
-    print(f"Model loaded: {ARCHITECTURE} on {_device}")
-
-
-@app.on_event("startup")
-def startup_event():
-    load_model()
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -161,10 +177,8 @@ async def pipeline(file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid image file")
 
-    # Classify
     classification = predict(image)
 
-    # Extract text with OCR
     try:
         import pytesseract
         text = pytesseract.image_to_string(image, lang="eng")
