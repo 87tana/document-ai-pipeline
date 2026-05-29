@@ -35,3 +35,6 @@ prediction_logs/
 test_doc*.png
 response.json
 src/serving/response.json
+docker/Dockerfile.backup
+event.json
+response.json

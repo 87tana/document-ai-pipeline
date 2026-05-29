@@ -1,0 +1,7 @@
+fastapi
+mangum
+pydantic
+python-multipart
+numpy<2
+onnxruntime
+Pillow

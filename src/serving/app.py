@@ -1,6 +1,7 @@
 # src/serving/app.py
 """
 FastAPI serving layer for Document AI Pipeline.
+Uses ONNX Runtime instead of PyTorch for fast cold start on Lambda.
 
 Endpoints:
     GET  /health     - health check
@@ -13,71 +14,61 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import boto3
-import timm
-import torch
+import numpy as np
+import onnxruntime as ort
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel
-from torchvision import transforms
 
-from src.monitoring.monitor import log_prediction
+import json, logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def log_prediction(predicted_class, confidence):
+    logger.info(json.dumps({'event': 'prediction', 'class': predicted_class, 'confidence': confidence}))
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-MODEL_PATH = Path("/tmp/best_model.pt")
+MODEL_PATH = Path("/tmp/efficientnet_b0.onnx")
 S3_BUCKET = "document-ai-pipeline-models"
-S3_KEY = "models/exp3_efficientnet_b0/best_model.pt"
-ARCHITECTURE = "efficientnet_b0"
-NUM_CLASSES = 16
+S3_KEY = "models/exp3_efficientnet_b0/efficientnet_b0.onnx"
 IMAGE_SIZE = 224
 
 LABELS = [
     "letter", "form", "email", "handwritten", "advertisement",
+
     "scientific_report", "scientific_publication", "specification",
     "file_folder", "news_article", "budget", "invoice",
     "presentation", "questionnaire", "resume", "memo"
 ]
 
+# ImageNet normalization values
+MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
 
 # ── Model loading ─────────────────────────────────────────────────────────────
 
-_model = None
-_device = None
-_transform = None
+_session = None
 
 
 def load_model():
-    global _model, _device, _transform
+    global _session
 
-    # Download model from S3 if not present locally
+    # Download ONNX model from S3 if not present
     if not MODEL_PATH.exists():
-        print("Downloading model from S3...")
+        print("Downloading ONNX model from S3...")
         MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
         boto3.client("s3").download_file(S3_BUCKET, S3_KEY, str(MODEL_PATH))
-        print("Model downloaded from S3.")
+        print("ONNX model downloaded.")
 
-    _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    _model = timm.create_model(
-        ARCHITECTURE,
-        pretrained=False,
-        num_classes=NUM_CLASSES
-    )
-    _model.load_state_dict(torch.load(MODEL_PATH, map_location=_device))
-    _model.to(_device)
-    _model.eval()
-
-    _transform = transforms.Compose([
-        transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406],
-                             [0.229, 0.224, 0.225]),
-    ])
-    print(f"Model loaded: {ARCHITECTURE} on {_device}")
+    _session = ort.InferenceSession(str(MODEL_PATH))
+    print("ONNX model loaded successfully.")
 
 
-# ── Lifespan — runs load_model() at startup ───────────────────────────────────
+# ── Lifespan ──────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app):
@@ -90,7 +81,7 @@ async def lifespan(app):
 app = FastAPI(
     title="Document AI Pipeline",
     description="Document classification and text extraction for clinic document triage.",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -125,20 +116,30 @@ class PipelineResponse(BaseModel):
 
 # ── Helper ────────────────────────────────────────────────────────────────────
 
+def preprocess(image: Image.Image) -> np.ndarray:
+    """Preprocess image for ONNX inference."""
+    img = image.convert("RGB").resize((IMAGE_SIZE, IMAGE_SIZE))
+    arr = np.array(img, dtype=np.float32) / 255.0
+    arr = (arr - MEAN) / STD
+    arr = arr.transpose(2, 0, 1)  # HWC -> CHW
+    return arr[np.newaxis, :]     # add batch dimension
+
+
 def predict(image: Image.Image) -> ClassifyResponse:
-    img = image.convert("RGB")
-    tensor = _transform(img).unsqueeze(0).to(_device)
+    input_array = preprocess(image)
+    outputs = _session.run(None, {"input": input_array})
+    logits = outputs[0][0]
 
-    with torch.no_grad():
-        logits = _model(tensor)
-        probs = torch.softmax(logits, dim=1)[0].cpu().tolist()
+    # Softmax
+    exp_logits = np.exp(logits - np.max(logits))
+    probs = exp_logits / exp_logits.sum()
 
-    pred_id = int(torch.argmax(torch.tensor(probs)))
+    pred_id = int(np.argmax(probs))
     return ClassifyResponse(
         predicted_class=LABELS[pred_id],
         class_id=pred_id,
-        confidence=round(probs[pred_id], 4),
-        all_scores={label: round(score, 4)
+        confidence=round(float(probs[pred_id]), 4),
+        all_scores={label: round(float(score), 4)
                     for label, score in zip(LABELS, probs)}
     )
 
@@ -149,8 +150,8 @@ def predict(image: Image.Image) -> ClassifyResponse:
 def health():
     return HealthResponse(
         status="ok",
-        model=ARCHITECTURE,
-        version="0.1.0"
+        model="efficientnet_b0_onnx",
+        version="0.2.0"
     )
 
 
@@ -190,3 +191,6 @@ async def pipeline(file: UploadFile = File(...)):
         extracted_text=text.strip(),
         word_count=len(words)
     )
+
+from mangum import Mangum
+handler = Mangum(app)
