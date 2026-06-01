@@ -20,8 +20,10 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel
+from mangum import Mangum  
 
-import json, logging
+import json
+import logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -192,5 +194,5 @@ async def pipeline(file: UploadFile = File(...)):
         word_count=len(words)
     )
 
-from mangum import Mangum
+
 handler = Mangum(app)
