@@ -5,3 +5,6 @@ python-multipart
 numpy<2
 onnxruntime
 Pillow
+spacy>=3.7.0
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+click

@@ -19,6 +19,9 @@ import onnxruntime as ort
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
+
+from src.nlp.ocr import extract_text
+from src.nlp.ner import extract_entities
 from pydantic import BaseModel
 from mangum import Mangum  
 
@@ -196,3 +199,73 @@ async def pipeline(file: UploadFile = File(...)):
 
 
 handler = Mangum(app)
+
+
+# ── OCR endpoint ──────────────────────────────────────────────────────────────
+
+
+
+class OCRResponse(BaseModel):
+    text: str
+    char_count: int
+    lang: str
+
+
+@app.post("/ocr", response_model=OCRResponse)
+async def ocr(file: UploadFile = File(...), lang: str = "eng"):
+    """Extract raw text from a document image."""
+    contents = await file.read()
+    try:
+        image = Image.open(io.BytesIO(contents))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image file")
+
+    text = extract_text(image, lang=lang)
+    return OCRResponse(text=text, char_count=len(text), lang=lang)
+
+
+# ── Combined extract endpoint ─────────────────────────────────────────────────
+
+
+# NOTE: OCR backend is selected via OCR_BACKEND env var.
+#   - Local dev:  Tesseract (free, offline)
+#   - Production: AWS Textract (managed, accurate)
+# Textract is currently disabled at the account level (subscription gate);
+# in Lambda, /extract returns empty raw_text and entities until subscription is enabled.
+# The abstraction is in place — swap is one env var.
+
+
+
+class ExtractResponse(BaseModel):
+    document_type: str
+    confidence: float
+    raw_text: str
+    char_count: int
+    entities: dict
+    lang: str
+
+
+@app.post("/extract", response_model=ExtractResponse)
+async def extract(file: UploadFile = File(...), lang: str = "eng"):
+    """Full pipeline: classify document, OCR its text, extract entities."""
+    contents = await file.read()
+    try:
+        image = Image.open(io.BytesIO(contents))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image file")
+
+    classification = predict(image)
+    text = extract_text(image, lang=lang)
+    ner_model = "de_core_news_sm" if lang == "deu" else "en_core_web_sm"
+    entities = extract_entities(text, model=ner_model)
+
+    log_prediction(classification.predicted_class, classification.confidence)
+
+    return ExtractResponse(
+        document_type=classification.predicted_class,
+        confidence=classification.confidence,
+        raw_text=text,
+        char_count=len(text),
+        entities=entities,
+        lang=lang,
+    )
