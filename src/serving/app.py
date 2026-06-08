@@ -19,6 +19,9 @@ import onnxruntime as ort
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
+
+from src.nlp.ocr import extract_text
+from src.nlp.ner import extract_entities
 from pydantic import BaseModel
 from mangum import Mangum  
 
@@ -200,7 +203,6 @@ handler = Mangum(app)
 
 # ── OCR endpoint ──────────────────────────────────────────────────────────────
 
-from src.nlp.ocr import extract_text
 
 
 class OCRResponse(BaseModel):
@@ -232,7 +234,6 @@ async def ocr(file: UploadFile = File(...), lang: str = "eng"):
 # in Lambda, /extract returns empty raw_text and entities until subscription is enabled.
 # The abstraction is in place — swap is one env var.
 
-from src.nlp.ner import extract_entities
 
 
 class ExtractResponse(BaseModel):
